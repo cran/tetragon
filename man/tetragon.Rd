@@ -9,64 +9,60 @@
 tetragon(
   df,
   seq_len = NULL,
-  deriv = NULL,
   ci = 0.8,
   method = NULL,
   distr = NULL,
-  n_windows = 10,
+  n_windows = 3,
   n_sample = 30,
-  search = "random",
-  fixed = FALSE,
   dates = NULL,
+  error_scale = "naive",
+  error_benchmark = "naive",
   seed = 42
 )
 }
 \arguments{
-\item{df}{A data frame with time features on columns.}
+\item{df}{A data frame with time features as columns.}
 
-\item{seq_len}{Positive integer. Time-step number of the projected sequence.}
-
-\item{deriv}{Integer vector. Number of differentiation operations to perform for each original time feature. 0 = no change; 1: one diff; 2: two diff.}
+\item{seq_len}{Positive integer. Time-step number of the projected sequence. Default: NULL (random selection between maximum boundaries).}
 
 \item{ci}{Confidence interval. Default: 0.8.}
 
-\item{method}{String. Distance method for calculating distance matrix among sequences. Possibile options are: "euclidean", "manhattan", "chebyshev", "gower", "lorentzian", "jaccard", "dice", "squared_euclidean", "divergence", "clark", "avg". For further information, please make reference to philentropy package. Default: NULL (random selection among all possible options).}
+\item{method}{String. Distance method for calculating distance matrix among sequences. Options are: "euclidean", "manhattan", "chebyshev", "gower", "lorentzian", "jaccard", "dice", "squared_euclidean", "divergence", "clark", "avg". Default: NULL (random selection among all possible options).}
 
-\item{distr}{String. DIstribution used to expand the distance matrix. Possible options are: "norm", "cauchy", "logis", "t", "exp". Default: NULL (random selection among all possible options).}
+\item{distr}{String. Distribution used to expand the distance matrix. Options are: "norm", "cauchy", "logis", "t", "exp", "empirical". Default: NULL (random selection among all possible options).}
 
-\item{n_windows}{Positive integer. Number of validation tests to measure/sample error. Default: 10.}
+\item{n_windows}{Positive integer. Number of validation tests to measure/sample error. Default: 3.}
 
 \item{n_sample}{Positive integer. Number of samples for grid or random search. Default: 30.}
 
-\item{search}{String. Two option available: "grid", "random". Default: "random".}
-
-\item{fixed}{Logical. Setting to TRUE, calculate a single model (if the variables passed to the functions are completed). Default: FALSE.}
-
 \item{dates}{Date. Vector with dates for time features.}
+
+\item{error_scale}{String. Scale for the scaled error metrics. Two options: "naive" (average of naive one-step absolute error for the historical series) or "deviation" (standard error of the historical series). Default: "naive".}
+
+\item{error_benchmark}{String. Benchmark for the relative error metrics. Two options: "naive" (sequential extension of last value) or "average" (mean value of true sequence). Default: "naive".}
 
 \item{seed}{Positive integer. Random seed. Default: 42.}
 }
 \value{
 This function returns a list including:
 \itemize{
-\item exploration: list of all not-null models, complete with predictions, test metrics, prediction stats and plot
-\item history: a table with the sampled models, hyper-parameters, validation errors, weighted average rank
-\item best: results for the best model in term of weighted average rank, including:
+\item exploration: list of all explored models, complete with predictions, testing metrics and plots
+\item history: a table with the sampled models, hyper-parameters, validation errors
+\item best: results for the best model including:
 \itemize{
-\item wt_avg_best: hyper-parameters of the best model selected through grid/random search
-\item predictions: min, max, q25, q50, q75, quantiles at selected ci, mean, sd, mode, kurtosis, skewness for each time feature
-\item testing_errors: testing errors for each time feature (ME, MAE, MSE, MPE, MAPE, sCE, MAPE, sMAE, sMSE, MASE, RMSSE, rMAE, rRMSE, rAME). For further information, make reference to greybox package.
-\item pred_stats: for each predicted time feature, IQR to range, KL-divergence, risk ratio, upside probability, averaged across prediction time-points and at the terminal points.
+\item predictions: min, max, q25, q50, q75, quantiles at selected ci, mean, sd, mode, skewness, kurtosis, IQR to range, risk ratio, upside probability, divergence and entropy for each point fo predicted sequences
+\item testing_errors: testing errors for one-step and sequence for each ts feature (me, mae, mse, rmsse, mpe, mape, rmae, rrmse, rame, mase, smse, sce, gmrae, pred_score)
+\item plots: confidence interval plot for each time feature
 }
 \item time_log
 }
 }
 \description{
-blablabla
+Each sequence is predicted by expanding the distance matrix. The compact set of hyper-parameters is tuned via grid or random search.
 }
 \examples{
 \donttest{
-tetragon(covid_in_europe[, c(2, 4)], seq_len = 40, n_sample = 2, deriv = c(1, 2))
+tetragon(covid_in_europe[, c(2, 4)], seq_len = 40, n_sample = 2)
 }
 }
 \seealso{
