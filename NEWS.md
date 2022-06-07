@@ -8,3 +8,9 @@
 * Renewed error calculation with greybox package.
 * Removed correlation weighting.
 * Added empirical distribution for matrix expansion.
+
+# tetragon 1.1.0
+
+* Now you can predict also on character/ factors sequences
+* Revised error metrics and some hyperparameters
+* Improved some performances (shift from philentropy to Rfast)

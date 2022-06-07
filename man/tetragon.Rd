@@ -21,25 +21,25 @@ tetragon(
 )
 }
 \arguments{
-\item{df}{A data frame with time features as columns.}
+\item{df}{A data frame with time features as columns. They could be continuous variables or not.}
 
 \item{seq_len}{Positive integer. Time-step number of the projected sequence. Default: NULL (random selection between maximum boundaries).}
 
 \item{ci}{Confidence interval. Default: 0.8.}
 
-\item{method}{String. Distance method for calculating distance matrix among sequences. Options are: "euclidean", "manhattan", "chebyshev", "gower", "lorentzian", "jaccard", "dice", "squared_euclidean", "divergence", "clark", "avg". Default: NULL (random selection among all possible options).}
+\item{method}{String. Distance method for calculating distance matrix among sequences. Options are: "euclidean", "manhattan", "maximum", "minkowski". Default: NULL (random selection among all possible options).}
 
-\item{distr}{String. Distribution used to expand the distance matrix. Options are: "norm", "cauchy", "logis", "t", "exp", "empirical". Default: NULL (random selection among all possible options).}
+\item{distr}{String. Distribution used to expand the distance matrix. Options are: "norm", "logis", "t", "exp", "chisq". Default: NULL (random selection among all possible options).}
 
-\item{n_windows}{Positive integer. Number of validation tests to measure/sample error. Default: 3.}
+\item{n_windows}{Positive integer. Number of validation tests to measure/sample error. Default: 3 (but a larger value is strongly suggested to really understand your accuracy).}
 
-\item{n_sample}{Positive integer. Number of samples for grid or random search. Default: 30.}
+\item{n_sample}{Positive integer. Number of samples for random search. Default: 30.}
 
 \item{dates}{Date. Vector with dates for time features.}
 
-\item{error_scale}{String. Scale for the scaled error metrics. Two options: "naive" (average of naive one-step absolute error for the historical series) or "deviation" (standard error of the historical series). Default: "naive".}
+\item{error_scale}{String. Scale for the scaled error metrics (only for continuous variables). Two options: "naive" (average of naive one-step absolute error for the historical series) or "deviation" (standard error of the historical series). Default: "naive".}
 
-\item{error_benchmark}{String. Benchmark for the relative error metrics. Two options: "naive" (sequential extension of last value) or "average" (mean value of true sequence). Default: "naive".}
+\item{error_benchmark}{String. Benchmark for the relative error metrics (only for continuous variables). Two options: "naive" (sequential extension of last value) or "average" (mean value of true sequence). Default: "naive".}
 
 \item{seed}{Positive integer. Random seed. Default: 42.}
 }
@@ -50,8 +50,8 @@ This function returns a list including:
 \item history: a table with the sampled models, hyper-parameters, validation errors
 \item best: results for the best model including:
 \itemize{
-\item predictions: min, max, q25, q50, q75, quantiles at selected ci, mean, sd, mode, skewness, kurtosis, IQR to range, risk ratio, upside probability, divergence and entropy for each point fo predicted sequences
-\item testing_errors: testing errors for one-step and sequence for each ts feature (me, mae, mse, rmsse, mpe, mape, rmae, rrmse, rame, mase, smse, sce, gmrae, pred_score)
+\item predictions: min, max, q25, q50, q75, quantiles at selected ci, and a bunch of specific measures for each point fo predicted sequences
+\item testing_errors: testing errors for one-step and sequence for each ts feature
 \item plots: confidence interval plot for each time feature
 }
 \item time_log
