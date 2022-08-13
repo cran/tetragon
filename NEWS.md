@@ -9,8 +9,13 @@
 * Removed correlation weighting.
 * Added empirical distribution for matrix expansion.
 
-# tetragon 1.1.0
+# tetragon 1.2.0
 
 * Now you can predict also on character/ factors sequences
 * Revised error metrics and some hyperparameters
 * Improved some performances (shift from philentropy to Rfast)
+
+# tetragon 1.3.0
+
+* Rationalization of code and processes
+* Added smoothing option

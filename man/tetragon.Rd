@@ -9,6 +9,7 @@
 tetragon(
   df,
   seq_len = NULL,
+  smoother = F,
   ci = 0.8,
   method = NULL,
   distr = NULL,
@@ -24,6 +25,8 @@ tetragon(
 \item{df}{A data frame with time features as columns. They could be continuous variables or not.}
 
 \item{seq_len}{Positive integer. Time-step number of the projected sequence. Default: NULL (random selection between maximum boundaries).}
+
+\item{smoother}{Logical. Perform optimal smoothing using standard loess. Default: FALSE}
 
 \item{ci}{Confidence interval. Default: 0.8.}
 

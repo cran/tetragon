@@ -2,6 +2,7 @@
 #'
 #' @param df A data frame with time features as columns. They could be continuous variables or not.
 #' @param seq_len Positive integer. Time-step number of the projected sequence. Default: NULL (random selection between maximum boundaries).
+#' @param smoother Logical. Perform optimal smoothing using standard loess. Default: FALSE
 #' @param ci Confidence interval. Default: 0.8.
 #' @param method String. Distance method for calculating distance matrix among sequences. Options are: "euclidean", "manhattan", "maximum", "minkowski". Default: NULL (random selection among all possible options).
 #' @param distr String. Distribution used to expand the distance matrix. Options are: "norm", "logis", "t", "exp", "chisq". Default: NULL (random selection among all possible options).
@@ -31,6 +32,7 @@
 #'
 #' @import purrr
 #' @import tictoc
+#' @import fastDummies
 #' @importFrom readr parse_number
 #' @importFrom lubridate seconds_to_period is.Date as.duration
 #' @importFrom stats weighted.mean ecdf lm rnorm na.omit
@@ -50,6 +52,7 @@
 #' @importFrom scales number
 #' @importFrom entropy entropy
 #' @importFrom Rfast Dist
+#' @importFrom fANCOVA loess.as
 
 
 #'@examples
@@ -57,7 +60,7 @@
 #'tetragon(covid_in_europe[, c(2, 4)], seq_len = 40, n_sample = 2)
 #'}
 
-tetragon <- function(df, seq_len = NULL, ci = 0.8, method = NULL, distr = NULL, n_windows = 3, n_sample = 30, dates = NULL, error_scale = "naive", error_benchmark = "naive", seed = 42)
+tetragon <- function(df, seq_len = NULL, smoother = F, ci = 0.8, method = NULL, distr = NULL, n_windows = 3, n_sample = 30, dates = NULL, error_scale = "naive", error_benchmark = "naive", seed = 42)
 {
   set.seed(seed)
 
@@ -67,30 +70,46 @@ tetragon <- function(df, seq_len = NULL, ci = 0.8, method = NULL, distr = NULL, 
   if(!is.data.frame(df)){stop("time features must be in dataframe format")}
 
   n_ts <- nrow(df)
+
+  class_index <- any(map_lgl(df, ~ is.factor(.x) | is.character(.x)))
+  all_classes <- all(class_index)
+  numeric_index <- map_lgl(df, ~ is.integer(.x) | is.numeric(.x))
+  all_numerics <- all(numeric_index)
+  if(!(all_classes | all_numerics)){stop("only all numerics or all classes, not both")}
+
+  if(all_classes){df <- dummy_cols(df, select_columns = NULL, remove_first_dummy = FALSE, remove_most_frequent_dummy = TRUE, ignore_na = FALSE, split = NULL, remove_selected_columns = TRUE); binary_class <- rep(T, ncol(df))}
+  if(all_numerics){binary_class <- rep(F, ncol(df))}
+
+  if(anyNA(df) & all_numerics){df <- as.data.frame(na_kalman(df)); message("kalman imputation on time features\n")}
+  if(anyNA(df) & all_classes){df <- floor(as.data.frame(na_kalman(df))); message("kalman imputation on time features\n")}
+  if(smoother == TRUE & all_numerics){df <- as.data.frame(purrr::map(df, ~ suppressWarnings(loess.as(x=1:n_length, y=.x)$fitted))); message("performing optimal smoothing\n")}
+
   n_feat <- ncol(df)
   feat_names <- colnames(df)
 
-  feat_n_class <- NULL
-  feat_level_names <- NULL
+  #feat_n_class <- NULL
+  #feat_level_names <- NULL
 
-  all_classes <- all(map_lgl(df, ~ is.factor(.x) | is.character(.x)))
-  all_numbers <- all(map_lgl(df, ~ is.numeric(.x) | is.integer(.x)))
+  #all_classes <- all(map_lgl(df, ~ is.factor(.x) | is.character(.x)))
+  #all_numbers <- all(map_lgl(df, ~ is.numeric(.x) | is.integer(.x)))
 
-  if(!all_classes & !all_numbers){stop("only numbers or factors, but not both")}
+  #if(!all_classes & !all_numbers){stop("only numbers or factors, but not both")}
 
-  event_class <- all_classes & !all_numbers
-  if(anyNA(df) & event_class == FALSE){df <- as.data.frame(na_kalman(df))}
+  #event_class <- all_classes & !all_numbers
+  #if(anyNA(df) & event_class == FALSE){df <- as.data.frame(na_kalman(df))}
 
-  if(event_class == TRUE)
-  {
-    df <- as.data.frame(map(df, ~ as.factor(.x)))
-    feat_level_names <- map(df, ~ levels(.x))
-    feat_n_class <- map_dbl(feat_level_names, ~ length(.x))
-    df <- as.data.frame(data.matrix(df)-1)
-    deriv <- rep(0, n_feat)
-  }
+  #if(event_class == TRUE)
+  #{
+    #df <- as.data.frame(map(df, ~ as.factor(.x)))
+    #feat_level_names <- map(df, ~ levels(.x))
+    #feat_n_class <- map_dbl(feat_level_names, ~ length(.x))
+    #df <- as.data.frame(data.matrix(df)-1)
+    #deriv <- rep(0, n_feat)
+  #}
 
-  if(event_class == FALSE){deriv <- map_dbl(df, ~ best_deriv(.x))}
+  #if(event_class == FALSE){deriv <- map_dbl(df, ~ best_deriv(.x))}
+
+  deriv <- map_dbl(df, ~ best_deriv(.x))
 
   max_limit <- floor((n_ts - max(deriv))/(4 + n_windows + 1))
   if(max_limit < 3){stop("not enough data for the validation windows")}
@@ -108,7 +127,7 @@ tetragon <- function(df, seq_len = NULL, ci = 0.8, method = NULL, distr = NULL, 
     m_sample <- sampler(method, n_samp = n_sample, range = c("euclidean", "manhattan", "maximum", "minkowski"), multi = n_feat)
     dsr_sample <- sampler(distr, n_samp = n_sample, range = c("norm", "t", "exp", "logis", "chisq"), multi = n_feat)
 
-    if(event_class == TRUE){sl_sample <- map2(sl_sample, replicate(n_sample, deriv, simplify = FALSE), ~ ((.x - max(.y)) == 0) * (.x + 2) + ((.x - max(.y)) == 1) * (.x + 1) + ((.x - max(.y)) > 1) * .x)
+    if(all_classes){sl_sample <- map2(sl_sample, replicate(n_sample, deriv, simplify = FALSE), ~ ((.x - max(.y)) == 0) * (.x + 2) + ((.x - max(.y)) == 1) * (.x + 1) + ((.x - max(.y)) > 1) * .x)
     if(length(seq_len)==1 && any(sl_sample != seq_len)){message("fixing seq_len for available data")}}
 
     hyper_params <- list(sl_sample, m_sample, dsr_sample)
@@ -116,7 +135,7 @@ tetragon <- function(df, seq_len = NULL, ci = 0.8, method = NULL, distr = NULL, 
 
   if(fixed == TRUE){hyper_params <- list(sl_sample = list(seq_len), m_sample = list(method), dsr_sample = list(distr))}
 
-  exploration <- lapply(1:n_feat, function(ft) pmap(hyper_params, ~ tryCatch(windower(df[, ft, drop = TRUE], seq_len = ..1, deriv[ft], ci, method = ..2[ft], distr = ..3[ft], n_windows, dates, error_scale, error_benchmark, feat_names[ft], feat_n_class[ft], feat_level_names[[ft]], seed), error = function(e) NA)))
+  exploration <- lapply(1:n_feat, function(ft) pmap(hyper_params, ~ tryCatch(windower(df[, ft, drop = TRUE], seq_len = ..1, deriv[ft], ci, method = ..2[ft], distr = ..3[ft], n_windows, dates, error_scale, error_benchmark, feat_names[ft], binary_class[ft], seed), error = function(e) NA)))
 
   #failures <- map_lgl(exploration, ~ anyNA(.x))
   #failed <- hyper_params[failures]
@@ -135,8 +154,8 @@ tetragon <- function(df, seq_len = NULL, ci = 0.8, method = NULL, distr = NULL, 
     history <- data.frame(history, aggr_errors)
     rownames(history) <- NULL
 
-    if(event_class == FALSE){history <- ranker(history, focus = -c(1, 2, 3), inverse = NULL, absolute = c("me", "mpe", "sce"), reverse = FALSE)}
-    if(event_class == TRUE){history <- ranker(history, focus = -c(1, 2, 3), inverse = NULL, absolute = NULL, reverse = FALSE)}
+    if(all_numerics == TRUE){history <- ranker(history, focus = -c(1, 2, 3), inverse = NULL, absolute = c("me", "mpe", "sce"), reverse = FALSE)}
+    if(all_classes == TRUE){history <- ranker(history, focus = -c(1, 2, 3), inverse = NULL, absolute = NULL, reverse = FALSE)}
 
     best_index <- as.numeric(rownames(history[1,]))
   }
@@ -168,14 +187,14 @@ tetragon <- function(df, seq_len = NULL, ci = 0.8, method = NULL, distr = NULL, 
 
 
 ###SUPPORT FUNCTIONS
-windower <- function(ts, seq_len, deriv, ci, method, distr, n_windows, dates, error_scale, error_benchmark, feat_name, n_class, level_names, seed)
+windower <- function(ts, seq_len, deriv, ci, method, distr, n_windows, dates, error_scale, error_benchmark, feat_name, binary_class, seed)
 {
   n_ts <- length(ts)
   test_index <- unique(round(seq(seq_len * 4, n_ts, length.out = n_windows + 1)))
   n_test <- length(test_index)
   if((n_test - 1) < n_windows){message("not enough data, testing on ", (n_test - 1), " possible windows")}
 
-  results <- map(1:n_test, ~ engine(ts[1:test_index[.x]], seq_len, deriv, ci, method, distr, measure_error = ifelse(.x < n_test, TRUE, FALSE), n_sim = 100, dates, error_scale, error_benchmark, feat_name, n_class, level_names, seed))
+  results <- map(1:n_test, ~ engine(ts[1:test_index[.x]], seq_len, deriv, ci, method, distr, measure_error = ifelse(.x < n_test, TRUE, FALSE), n_sim = 100, dates, error_scale, error_benchmark, feat_name, binary_class, seed))
 
   window_errors <- head(map(results, ~ .x$errors), -1)
   testing_errors <- Reduce("+", window_errors)/length(window_errors)
@@ -190,7 +209,7 @@ windower <- function(ts, seq_len, deriv, ci, method, distr, n_windows, dates, er
 
 
 ####
-engine <- function(ts, seq_len, deriv, ci, method, distr, measure_error, n_sim, dates, error_scale, error_benchmark, feat_name, n_class, level_names, seed)
+engine <- function(ts, seq_len, deriv, ci, method, distr, measure_error, n_sim, dates, error_scale, error_benchmark, feat_name, binary_class, seed)
 {
 
   actual <- NULL
@@ -198,9 +217,9 @@ engine <- function(ts, seq_len, deriv, ci, method, distr, measure_error, n_sim, 
   n_ts <- length(ts)
 
   diff_model <- recursive_diff(ts, deriv)
-  diff_vector <- diff_model$vector
+  prep_vector <- diff_model$vector
 
-  segmented <- as.data.frame(smart_reframer(diff_vector, seq_len, seq_len))
+  segmented <- as.data.frame(smart_reframer(prep_vector, seq_len, seq_len))
   dist <- Dist(segmented, method = method, p = 3)
   minmax <- function(x){(x - min(x))/(max(x) - min(x))}
   dist <- apply(dist, 2, minmax)
@@ -264,27 +283,41 @@ engine <- function(ts, seq_len, deriv, ci, method, distr, measure_error, n_sim, 
 
   inv_weights <- map(weights, ~ 1/.x)
 
-  if(any(map_lgl(inv_weights, ~ anyNA(.x)))){print(seq_len); print(method); print(distr)}
+  ###if(any(map_lgl(inv_weights, ~ anyNA(.x)))){print(seq_len); print(method); print(distr)}
 
-  if(is.numeric(n_class)){inv_weights <- map(inv_weights, ~ round(minmax_transf(.x, min_r = 1, max_r = 10)))}
+  #if(is.numeric(n_class)){inv_weights <- map(inv_weights, ~ round(minmax_transf(.x, min_r = 1, max_r = 10)))}
 
-  #sample_pred_seeds <- t(mapply(function(wts) apply(segmented * inv_weights[[wts]], 2, sum, na.rm = TRUE)/sum(inv_weights[[wts]], na.rm = TRUE), wts = 1:length(inv_weights)))
-  if(is.null(n_class))
+  if(binary_class == FALSE){inv_weights <- map(inv_weights, ~ round(minmax_transf(.x, min_r = 1, max_r = 10)))}
+
+
+  pred_seeds <- t(mapply(function(wts) apply(segmented * inv_weights[[wts]], 2, sum, na.rm = TRUE)/sum(inv_weights[[wts]], na.rm = TRUE), wts = 1:length(inv_weights)))
+
+  if(binary_class == FALSE)
   {
-    sample_pred_seeds <- t(mapply(function(wts) apply(segmented * inv_weights[[wts]], 2, sum, na.rm = TRUE)/sum(inv_weights[[wts]], na.rm = TRUE), wts = 1:length(inv_weights)))
     heads <- diff_model$tail_value
-    pred_seeds <- t(apply(sample_pred_seeds, 1, function(x) tail(invdiff(x, heads), seq_len)))
+    pred_seeds <- t(apply(pred_seeds, 1, function(x) tail(invdiff(x, heads), seq_len)))
   }
 
-  if(is.numeric(n_class)){pred_seeds <- t(mapply(function(wts) apply(expand(segmented, inv_weights[[wts]]), 2, function(x) most_frequent(unlist(x))), wts = 1:length(inv_weights)))}
+
+  #if(!is.numeric(n_class))
+  #{
+    #sample_pred_seeds <- t(mapply(function(wts) apply(segmented * inv_weights[[wts]], 2, sum, na.rm = TRUE)/sum(inv_weights[[wts]], na.rm = TRUE), wts = 1:length(inv_weights)))
+    #heads <- diff_model$tail_value
+    #pred_seeds <- t(apply(sample_pred_seeds, 1, function(x) tail(invdiff(x, heads), seq_len)))
+  #}
+
+
+  #if(is.numeric(n_class)){pred_seeds <- t(mapply(function(wts) apply(expand(segmented, inv_weights[[wts]]), 2, function(x) most_frequent(unlist(x))), wts = 1:length(inv_weights)))}
 
   errors <- NULL
   pred_scores <- NULL
   if(measure_error == TRUE)
   {
-    pred_seeds <- doxa_filter(ts = head(ts, - seq_len), pred_seeds, n_class)
+    #pred_seeds <- doxa_filter(ts = head(ts, - seq_len), pred_seeds, n_class)
+    pred_seeds <- doxa_filter(ts = head(ts, - seq_len), pred_seeds, binary_class)
     pred_scores <- prediction_score(pred_seeds, actual)
-    errors <- apply(Reduce(rbind, map(split(pred_seeds, along = 1), ~ my_metrics(holdout = actual, forecast = .x, actual = head(ts, - seq_len), error_scale, error_benchmark, n_class))), 2, mean, na.rm = TRUE)
+    #errors <- apply(Reduce(rbind, map(split(pred_seeds, along = 1), ~ my_metrics(holdout = actual, forecast = .x, actual = head(ts, - seq_len), error_scale, error_benchmark, n_class))), 2, mean, na.rm = TRUE)
+    errors <- apply(Reduce(rbind, map(split(pred_seeds, along = 1), ~ custom_metrics(holdout = actual, forecast = .x, actual = head(ts, - seq_len), error_scale, error_benchmark, binary_class))), 2, mean, na.rm = TRUE)
     errors <- t(as.data.frame(errors))
     rownames(errors) <- feat_name
   }
@@ -293,18 +326,22 @@ engine <- function(ts, seq_len, deriv, ci, method, distr, measure_error, n_sim, 
   predictions <- NULL
   if(measure_error == FALSE)
   {
-    predictions <- quantile_prediction(raw_pred = pred_seeds, seed_pred = NULL, raw_error = NULL, holdout = NULL, tail_value = NULL, ts, ci, doxa = TRUE,
-    error_scale, error_benchmark, n_class, level_names, seed)$quant_pred
+    #predictions <- quantile_prediction(raw_pred = pred_seeds, seed_pred = NULL, raw_error = NULL, holdout = NULL, tail_value = NULL, ts, ci, doxa = TRUE,
+    #error_scale, error_benchmark, n_class, level_names, seed)$quant_pred
 
-    if(is.Date(dates)){new_dates<- seq.Date(tail(dates, 1), tail(dates, 1) + seq_len * mean(diff(dates)), length.out = seq_len); rownames(predictions) <- as.character(new_dates)} else {new_dates <- 1:seq_len}
-    if(is.Date(dates)){x_hist <- dates; x_forcat <- new_dates} else {x_hist <- 1:n_ts; x_forcat <- (n_ts + 1):(n_ts + seq_len); rownames(predictions) <- paste0("t", 1:seq_len)}
-    x_lab <- paste0("Forecasting Horizon for sequence n = ", seq_len)
-    y_lab <- paste0("Forecasting Values for ", feat_name)
+    predictions <- qpred(raw_pred = pred_seeds, holdout_truth = NULL, ts, ci, error_scale, error_benchmark, binary_class, dates, seed)$quant_pred
+    plot <- plotter(quant_pred = predictions, ci, ts, dates, feat_name)
 
-    if(is.numeric(n_class)){ts <- level_names[ts + 1]}
-    lower_b <- paste0((1-ci)/2 * 100, "%")
-    upper_b <- paste0((ci+(1-ci)/2) * 100, "%")
-    plot <- ts_graph(x_hist = x_hist, y_hist = ts, x_forcat = x_forcat, y_forcat = predictions[, "50%"], lower = predictions[, lower_b], upper = predictions[, upper_b], label_x = x_lab, label_y = y_lab)
+
+    #if(is.Date(dates)){new_dates<- seq.Date(tail(dates, 1), tail(dates, 1) + seq_len * mean(diff(dates)), length.out = seq_len); rownames(predictions) <- as.character(new_dates)} else {new_dates <- 1:seq_len}
+    #if(is.Date(dates)){x_hist <- dates; x_forcat <- new_dates} else {x_hist <- 1:n_ts; x_forcat <- (n_ts + 1):(n_ts + seq_len); rownames(predictions) <- paste0("t", 1:seq_len)}
+    #x_lab <- paste0("Forecasting Horizon for sequence n = ", seq_len)
+    #y_lab <- paste0("Forecasting Values for ", feat_name)
+
+    #if(is.numeric(n_class)){ts <- level_names[ts + 1]}
+    #lower_b <- paste0((1-ci)/2 * 100, "%")
+    #upper_b <- paste0((ci+(1-ci)/2) * 100, "%")
+    #plot <- ts_graph(x_hist = x_hist, y_hist = ts, x_forcat = x_forcat, y_forcat = predictions[, "50%"], lower = predictions[, lower_b], upper = predictions[, upper_b], label_x = x_lab, label_y = y_lab)
 
    }
 
@@ -362,49 +399,6 @@ matrix_expansion <- function(dist_mat)
 
   return(pred)
 }
-
-###
-my_metrics <- function(holdout, forecast, actuals, error_scale = "naive", error_benchmark = "naive", n_class = NULL)
-{
-  if(is.null(n_class))
-  {
-    scale <- switch(error_scale, "deviation" = sd(actuals), "naive" = mean(abs(diff(actuals))))
-    benchmark <- switch(error_benchmark, "average" = rep(mean(forecast), length(forecast)), "naive" = rep(tail(actuals, 1), length(forecast)))
-    me <- ME(holdout, forecast, na.rm = TRUE)
-    mae <- MAE(holdout, forecast, na.rm = TRUE)
-    mse <- MSE(holdout, forecast, na.rm = TRUE)
-    rmsse <- RMSSE(holdout, forecast, scale, na.rm = TRUE)
-    mre <- MRE(holdout, forecast, na.rm = TRUE)
-    mpe <- MPE(holdout, forecast, na.rm = TRUE)
-    mape <- MAPE(holdout, forecast, na.rm = TRUE)
-    rmae <- rMAE(holdout, forecast, benchmark, na.rm = TRUE)
-    rrmse <- rRMSE(holdout, forecast, benchmark, na.rm = TRUE)
-    rame <- rAME(holdout, forecast, benchmark, na.rm = TRUE)
-    mase <- MASE(holdout, forecast, scale, na.rm = TRUE)
-    smse <- sMSE(holdout, forecast, scale, na.rm = TRUE)
-    sce <- sCE(holdout, forecast, scale, na.rm = TRUE)
-    gmrae <- GMRAE(holdout, forecast, benchmark, na.rm = TRUE)
-    out <- round(c(me = me, mae = mae, mse = mse, rmsse = rmsse, mpe = mpe, mape = mape, rmae = rmae, rrmse = rrmse, rame = rame, mase = mase, smse = smse, sce = sce, gmrae = gmrae), 3)
-  }
-
-  if(is.numeric(n_class))
-  {
-    avg <- suppressMessages(distance(rbind(holdout, forecast), method = "avg"))
-    tanimoto <- suppressMessages(distance(rbind(holdout, forecast), method = "tanimoto"))
-    hassebrook <- 1 - suppressMessages(distance(rbind(holdout, forecast), method = "hassebrook"))
-    jaccard <- suppressMessages(distance(rbind(holdout, forecast), method = "jaccard"))
-    taneja <- suppressMessages(distance(rbind(holdout, forecast), method = "taneja"))
-    canberra <- suppressMessages(distance(rbind(holdout, forecast), method = "canberra"))
-    gower <- suppressMessages(distance(rbind(holdout, forecast), method = "gower"))
-    lorentzian <- suppressMessages(distance(rbind(holdout, forecast), method = "lorentzian"))
-    clark <- suppressMessages(distance(rbind(holdout, forecast), method = "clark"))
-
-    out <- round(c(avg, tanimoto, hassebrook, jaccard, taneja, canberra, gower, lorentzian, clark), 4)
-  }
-
-  return(out)
-}
-
 
 ###
 trunc_t <- function(n, a, b, df, ncp)
@@ -465,107 +459,6 @@ best_deriv <- function(ts, max_diff = 3, thresh = 0.001)
 
   return(best)
 }
-
-###
-quantile_prediction <- function(raw_pred = NULL, seed_pred = NULL, raw_error = NULL, holdout = NULL, tail_value = NULL, ts, ci, doxa,
-                                error_scale = "naive", error_benchmark = "naive", n_class = NULL, level_names = NULL, seed = 42)
-{
-  set.seed(seed)
-
-  not_null<- c(!is.null(seed_pred), !is.null(raw_error))
-  if(all(not_null))
-  {
-    pred_integration <- function(pred_seed, error_raw){as.data.frame(map2(pred_seed, error_raw, ~ .x + sample(.y, size = 1000, replace = TRUE)))}
-    raw_pred <- pred_integration(seed_pred, raw_error)
-    if(!is.null(tail_value)){raw_pred <- t(apply(raw_pred, 1, function(x) invdiff(x, heads = tail_value, add = FALSE)))}
-  }
-
-  if(!is.null(raw_pred))
-  {
-    if(doxa == TRUE){raw_pred <- doxa_filter(ts, raw_pred, n_class)}
-    quants <- sort(unique(c((1-ci)/2, 0.25, 0.5, 0.75, ci+(1-ci)/2)))
-
-    if(is.null(n_class))
-    {
-      p_stats <- function(x){c(min = suppressWarnings(min(x, na.rm = TRUE)), quantile(x, probs = quants, na.rm = TRUE), max = suppressWarnings(max(x, na.rm = TRUE)), mean = mean(x, na.rm = TRUE), sd = sd(x, na.rm = TRUE), mode = suppressWarnings(mlv1(x[is.finite(x)], method = "shorth")), kurtosis = suppressWarnings(kurtosis(x[is.finite(x)], na.rm = TRUE)), skewness = suppressWarnings(skewness(x[is.finite(x)], na.rm = TRUE)))}
-      quant_pred <- as.data.frame(t(as.data.frame(apply(raw_pred, 2, p_stats))))
-      p_value <- apply(raw_pred, 2, function(x) ecdf(x)(seq(min(raw_pred), max(raw_pred), length.out = 1000)))
-      divergence <- c(NA, apply(p_value[,-1, drop = FALSE] - p_value[,-ncol(p_value), drop = FALSE], 2, function(x) abs(max(x, na.rm = TRUE))))
-      upside_prob <- c(NA, colMeans(apply(raw_pred[,-1, drop = FALSE]/raw_pred[,-ncol(raw_pred), drop = FALSE], 2, function(x) x > 1)))
-      iqr_to_range <- (quant_pred[, "75%"] - quant_pred[, "25%"])/(quant_pred[, "max"] - quant_pred[, "min"])
-      median_range_ratio <- (quant_pred[, "max"] - quant_pred[, "50%"])/(quant_pred[, "50%"] - quant_pred[, "min"])
-      quant_pred <- as.data.frame(round(cbind(quant_pred, iqr_to_range, median_range_ratio, upside_prob, divergence), 4))
-    }
-
-    if(is.numeric(n_class) & !is.null(level_names))
-    {
-      freq <- function(x) {sapply(0:(n_class-1), function(n) sum(x == n))}
-      p_stats <- function(x){c(min = suppressWarnings(min(x, na.rm = TRUE)), quantile(x, probs = quants, na.rm = TRUE), max = suppressWarnings(max(x, na.rm = TRUE)), props = freq(x)/length(x), difformity = sd(freq(x)/length(x))/sd(c(1, rep(0, n_class - 1))), entropy = entropy(freq(x)))}
-      quant_pred <- as.data.frame(t(as.data.frame(apply(raw_pred, 2, p_stats))))
-      p_value <- apply(raw_pred, 2, function(x) ecdf(x)(0:(n_class - 1)))
-      divergence <- c(NA, apply(p_value[,-1, drop = FALSE] - p_value[,-ncol(p_value), drop = FALSE], 2, function(x) abs(max(x, na.rm = TRUE))))
-      upgrade_prob <- c(NA, colMeans(apply((raw_pred[,-1, drop = FALSE] + 1)/(raw_pred[,-ncol(raw_pred), drop = FALSE] + 1), 2, function(x) x > 1)))###ADDING ONE TO SOLVE ISSUE WITH CLASS ZERO
-      quant_pred <- as.data.frame(round(cbind(quant_pred, upgrade_prob = upgrade_prob, divergence = divergence), 4))
-
-      ###FIXING FACTOR LABELS
-      n_quants <- length(quants) + 2###QUANTILES + MIN & MAX
-      m_index <- as.matrix(quant_pred[, 1:n_quants] + 1)###INDEXING FROM O TO 1
-      releveled <- as.data.frame(matrix(level_names[m_index], nrow(m_index), ncol(m_index)))
-      colnames(releveled) <- c("min", paste0(quants * 100, "%"), "max")
-      quant_pred <- as.data.frame(cbind(releveled, quant_pred[, c(paste0("props", 1:n_class), "difformity", "entropy", "upgrade_prob", "divergence")]))
-      colnames(quant_pred) <- c(colnames(releveled), paste0("prop_", level_names), "difformity", "entropy", "upgrade_prob", "divergence")
-    }
-  }
-
-  testing_error <- NULL
-  if(!is.null(holdout))
-  {
-    if(is.null(n_class)){
-      mean_pred <- colMeans(raw_pred)
-      testing_error <- my_metrics(holdout, mean_pred, ts, error_scale, error_benchmark, n_class)}
-
-    if(is.numeric(n_class)){
-      testing_error <- apply(apply(raw_pred, 1, function(x) my_metrics(holdout, x, n_class = n_class)), 1, function(x) mean(x, na.rm = TRUE))
-    }
-  }
-
-  outcome <- list(raw_pred = raw_pred, quant_pred = quant_pred, testing_error = testing_error)
-  return(outcome)
-}
-
-###
-doxa_filter <- function(ts, mat, n_class = NULL)
-{
-  discrete_check <- all(ts%%1 == 0)
-  all_positive_check <- all(ts >= 0)
-  all_negative_check <- all(ts <= 0)
-  monotonic_increase_check <- all(diff(ts) >= 0)
-  monotonic_decrease_check <- all(diff(ts) <= 0)
-
-  monotonic_fixer <- function(x, mode)
-  {
-    model <- recursive_diff(x, 1)
-    vect <- model$vector
-    if(mode == 0){vect[vect < 0] <- 0; vect <- invdiff(vect, model$head_value, add = TRUE)}
-    if(mode == 1){vect[vect > 0] <- 0; vect <- invdiff(vect, model$head_value, add = TRUE)}
-    return(vect)
-  }
-
-  if(is.null(n_class))
-  {
-    if(all_positive_check){mat[mat < 0] <- 0}
-    if(all_negative_check){mat[mat > 0] <- 0}
-    if(discrete_check){mat <- round(mat)}
-    #if(!is.null(bounded)){mat[mat > max(bounded)] <- max(bounded); mat[mat < min(bounded)] <- min(bounded)}
-    if(monotonic_increase_check){mat <- t(apply(mat, 1, function(x) monotonic_fixer(x, mode = 0)))}
-    if(monotonic_decrease_check){mat <- t(apply(mat, 1, function(x) monotonic_fixer(x, mode = 1)))}
-  }
-
-  if(is.numeric(n_class)){mat <- round(mat); mat[mat > (n_class - 1)] <- (n_class - 1); mat[mat < 1] <- 0}
-
-  return(mat)
-}
-
 
 ###
 prediction_score <- function(integrated_preds, ground_truth)
@@ -672,4 +565,169 @@ most_frequent <- function(vect)
   if(is.factor(vect)){most_freq <- factor(most_freq, levels = levels(vect))}
   return(most_freq)
 }
+
+###
+qpred <- function(raw_pred, holdout_truth = NULL, ts, ci, error_scale = "naive", error_benchmark = "naive", binary_class = F, dates, seed = 42)
+{
+  set.seed(seed)
+
+  raw_pred <- doxa_filter(ts, raw_pred, binary_class)
+  quants <- sort(unique(c((1-ci)/2, 0.25, 0.5, 0.75, ci+(1-ci)/2)))
+
+  if(binary_class == F)
+  {
+    p_stats <- function(x){c(min = suppressWarnings(min(x, na.rm = TRUE)), quantile(x, probs = quants, na.rm = TRUE), max = suppressWarnings(max(x, na.rm = TRUE)), mean = mean(x, na.rm = TRUE), sd = sd(x, na.rm = TRUE), mode = suppressWarnings(mlv1(x[is.finite(x)], method = "shorth")), kurtosis = suppressWarnings(kurtosis(x[is.finite(x)], na.rm = TRUE)), skewness = suppressWarnings(skewness(x[is.finite(x)], na.rm = TRUE)))}
+    quant_pred <- as.data.frame(t(as.data.frame(apply(raw_pred, 2, p_stats))))
+    p_value <- apply(raw_pred, 2, function(x) ecdf(x)(seq(min(raw_pred), max(raw_pred), length.out = 1000)))
+    divergence <- c(max(p_value[,1] - seq(0, 1, length.out = 1000)), apply(p_value[,-1, drop = FALSE] - p_value[,-ncol(p_value), drop = FALSE], 2, function(x) abs(max(x, na.rm = TRUE))))
+    upside_prob <- c(mean((raw_pred[,1]/tail(ts, 1)) > 1, na.rm = T), apply(apply(raw_pred[,-1, drop = FALSE]/raw_pred[,-ncol(raw_pred), drop = FALSE], 2, function(x) x > 1), 2, mean, na.rm = T))
+    iqr_to_range <- (quant_pred[, "75%"] - quant_pred[, "25%"])/(quant_pred[, "max"] - quant_pred[, "min"])
+    above_to_below_range <- (quant_pred[, "max"] - quant_pred[, "50%"])/(quant_pred[, "50%"] - quant_pred[, "min"])
+    quant_pred <- round(cbind(quant_pred, iqr_to_range, above_to_below_range, upside_prob, divergence), 4)
+  }
+
+  if(binary_class == T)
+  {
+    p_stats <- function(x){c(min = suppressWarnings(min(x, na.rm = TRUE)), quantile(x, probs = quants, na.rm = TRUE), max = suppressWarnings(max(x, na.rm = TRUE)), prop = mean(x, na.rm = TRUE), sd = sd(x, na.rm = TRUE), entropy = entropy(x))}
+    quant_pred <- as.data.frame(t(as.data.frame(apply(raw_pred, 2, p_stats))))
+    p_value <- apply(raw_pred, 2, function(x) ecdf(x)(c(0, 1)))
+    divergence <- c(max(p_value[,1] - c(0, 1)), apply(p_value[,-1, drop = FALSE] - p_value[,-ncol(p_value), drop = FALSE], 2, function(x) abs(max(x, na.rm = TRUE))))
+    upgrade_prob <- c(mean(((raw_pred[,1] + 1)/tail(ts + 1, 1)) > 1, na.rm = T), apply(apply((raw_pred[,-1, drop = FALSE] + 1)/(raw_pred[,-ncol(raw_pred), drop = FALSE] + 1), 2, function(x) x > 1), 2, mean, na.rm = T))
+    quant_pred <- round(cbind(quant_pred, upgrade_prob = upgrade_prob, divergence = divergence), 4)
+  }
+
+  testing_error <- NULL
+  if(!is.null(holdout_truth))
+  {
+    mean_pred <- colMeans(raw_pred)
+    testing_error <- custom_metrics(holdout_truth, mean_pred, ts, error_scale, error_benchmark, binary_class)
+    pred_scores <- round(prediction_score(raw_pred, holdout_truth), 4)
+    quant_pred <- cbind(quant_pred, pred_scores = pred_scores)
+  }
+
+  if(is.Date(dates))
+  {
+    new_dates<- seq.Date(tail(dates, 1), tail(dates, 1) + nrow(quant_pred) * mean(diff(dates)), length.out = nrow(quant_pred))
+    rownames(quant_pred) <- as.character(new_dates)
+  }
+  else
+  {
+    rownames(quant_pred) <- paste0("t", 1:nrow(quant_pred))
+  }
+
+  outcome <- list(quant_pred = quant_pred, testing_error = testing_error)
+  return(outcome)
+}
+
+###
+plotter <- function(quant_pred, ci, ts, dates = NULL, feat_name)
+{
+  seq_len <- nrow(quant_pred)
+  n_ts <- length(ts)
+
+  if(is.Date(dates))
+  {
+    new_dates<- seq.Date(tail(dates, 1), tail(dates, 1) + seq_len * mean(diff(dates)), length.out = seq_len)
+    x_hist <- dates
+    x_forcat <- new_dates
+    rownames(quant_pred) <- as.character(new_dates)
+  }
+  else
+  {
+    x_hist <- 1:n_ts
+    x_forcat <- (n_ts + 1):(n_ts + seq_len)
+    rownames(quant_pred) <- paste0("t", 1:seq_len)
+  }
+
+  quant_pred <- as.data.frame(quant_pred)
+  x_lab <- paste0("Forecasting Horizon for sequence n = ", seq_len)
+  y_lab <- paste0("Forecasting Values for ", feat_name)
+
+  ###if(is.numeric(n_class) & !is.null(level_names)){ts <- level_names[ts + 1]}
+  lower_b <- paste0((1-ci)/2 * 100, "%")
+  upper_b <- paste0((ci+(1-ci)/2) * 100, "%")
+
+  plot <- ts_graph(x_hist = x_hist, y_hist = ts, x_forcat = x_forcat, y_forcat = quant_pred[, "50%"], lower = quant_pred[, lower_b], upper = quant_pred[, upper_b], label_x = x_lab, label_y = y_lab)
+  return(plot)
+}
+
+###
+doxa_filter <- function(ts, mat, binary_class = F)
+{
+  discrete_check <- all(ts%%1 == 0)
+  all_positive_check <- all(ts >= 0)
+  all_negative_check <- all(ts <= 0)
+  monotonic_increase_check <- all(diff(ts) >= 0)
+  monotonic_decrease_check <- all(diff(ts) <= 0)
+
+  monotonic_fixer <- function(x, mode)
+  {
+    model <- recursive_diff(x, 1)
+    vect <- model$vector
+    if(mode == 0){vect[vect < 0] <- 0; vect <- invdiff(vect, model$head_value, add = TRUE)}
+    if(mode == 1){vect[vect > 0] <- 0; vect <- invdiff(vect, model$head_value, add = TRUE)}
+    return(vect)
+  }
+
+  if(all_positive_check){mat[mat < 0] <- 0}
+  if(all_negative_check){mat[mat > 0] <- 0}
+  if(discrete_check){mat <- round(mat)}
+  if(monotonic_increase_check){mat <- t(apply(mat, 1, function(x) monotonic_fixer(x, mode = 0)))}
+  if(monotonic_decrease_check){mat <- t(apply(mat, 1, function(x) monotonic_fixer(x, mode = 1)))}
+
+  if(binary_class == T){mat[mat > 1] <- 1; mat[mat < 1] <- 0}
+  mat <- na.omit(mat)
+
+  return(mat)
+}
+
+
+###
+custom_metrics <- function(holdout, forecast, actuals, error_scale = "naive", error_benchmark = "naive", binary_class = F)
+{
+
+  if(binary_class == F)
+  {
+    scale <- switch(error_scale, "deviation" = sd(actuals), "naive" = mean(abs(diff(actuals))))
+    benchmark <- switch(error_benchmark, "average" = rep(mean(forecast), length(forecast)), "naive" = rep(tail(actuals, 1), length(forecast)))
+    me <- ME(holdout, forecast, na.rm = TRUE)
+    mae <- MAE(holdout, forecast, na.rm = TRUE)
+    mse <- MSE(holdout, forecast, na.rm = TRUE)
+    rmsse <- RMSSE(holdout, forecast, scale, na.rm = TRUE)
+    mre <- MRE(holdout, forecast, na.rm = TRUE)
+    mpe <- MPE(holdout, forecast, na.rm = TRUE)
+    mape <- MAPE(holdout, forecast, na.rm = TRUE)
+    rmae <- rMAE(holdout, forecast, benchmark, na.rm = TRUE)
+    rrmse <- rRMSE(holdout, forecast, benchmark, na.rm = TRUE)
+    rame <- rAME(holdout, forecast, benchmark, na.rm = TRUE)
+    mase <- MASE(holdout, forecast, scale, na.rm = TRUE)
+    smse <- sMSE(holdout, forecast, scale, na.rm = TRUE)
+    sce <- sCE(holdout, forecast, scale, na.rm = TRUE)
+    gmrae <- GMRAE(holdout, forecast, benchmark, na.rm = TRUE)
+    out <- round(c(me = me, mae = mae, mse = mse, rmsse = rmsse, mpe = mpe, mape = mape, rmae = rmae, rrmse = rrmse, rame = rame, mase = mase, smse = smse, sce = sce, gmrae = gmrae), 3)
+  }
+
+  if(binary_class == T)
+  {
+    dice <- suppressMessages(distance(rbind(holdout, forecast), method = "dice"))
+    jaccard <- suppressMessages(distance(rbind(holdout, forecast), method = "jaccard"))
+    cosine <- suppressMessages(distance(rbind(holdout, forecast), method = "cosine"))
+    canberra <- suppressMessages(distance(rbind(holdout, forecast), method = "canberra"))
+    gower <- suppressMessages(distance(rbind(holdout, forecast), method = "gower"))
+    tanimoto <- suppressMessages(distance(rbind(holdout, forecast), method = "tanimoto"))
+    hassebrook <- 1 - suppressMessages(distance(rbind(holdout, forecast), method = "hassebrook"))
+    taneja <- suppressMessages(distance(rbind(holdout, forecast), method = "taneja"))
+    lorentzian <- suppressMessages(distance(rbind(holdout, forecast), method = "lorentzian"))
+    clark <- suppressMessages(distance(rbind(holdout, forecast), method = "clark"))
+    sorensen <- suppressMessages(distance(rbind(holdout, forecast), method = "sorensen"))
+    harmonic_mean <- suppressMessages(distance(rbind(holdout, forecast), method = "harmonic_mean"))
+    avg <- suppressMessages(distance(rbind(holdout, forecast), method = "avg"))
+
+    out <- round(c(dice, jaccard, cosine, canberra, gower, tanimoto, hassebrook, taneja, lorentzian, clark, sorensen, harmonic_mean, avg), 4)
+  }
+
+  return(out)
+}
+
+
 
